@@ -216,6 +216,9 @@ def main():
     split_edge = dataset.get_edge_split()
     graph = dataset[0]
 
+    # Add self-loops to the graph
+    graph = graph.add_self_loop()
+
     # Prepare features
     in_feats = graph.ndata["feat"].shape[1]
     train_feats = graph.ndata["feat"]

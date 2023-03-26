@@ -3,8 +3,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from dgl.nn import GraphConv
-from ogb.linkproppred import DglLinkPropPredDataset
+from ogb.linkproppred import DglLinkPropPredDataset, Evaluator
 from torch.utils.data import DataLoader
+import argparse
 
 
 # Define the GCN model
@@ -13,12 +14,13 @@ class GCN(nn.Module):
         super(GCN, self).__init__()
         self.conv = GraphConv(in_feats, emb_feats)
 
-    def forward(self, graph, x):
-        # Set the device for the graph and input tensors
-        device = graph.device
+    def reset_parameters(self):
+        for conv in self.convs:
+            conv.reset_parameters()
 
-        # Move the input tensors to the device
-        x = x.to(device)
+    def forward(self, graph, x):
+        # Move the input to the device of the graph
+        x = x.to(graph.device)
 
         # Compute node embeddings
         x = self.conv(graph, x)
@@ -69,18 +71,18 @@ def train(model, predictor, graph, split_edge, optimizer, batch_size):
         pos_out = predictor(emb_x[edge[0]], emb_x[edge[1]])
         pos_loss = -torch.log(pos_out + 1e-15).mean()
 
-        # # Generate negative edges
-        # edge = torch.randint(
-        #     0, graph.num_nodes(), edge.size(), dtype=torch.long, device=emb_x.device
-        # )
+        # Generate negative edges
+        edge = torch.randint(
+            0, graph.num_nodes(), edge.size(), dtype=torch.long, device=emb_x.device
+        )
 
-        # # Predict negative edges
-        # neg_out = predictor(emb_x[edge[0]], emb_x[edge[1]])
-        # neg_loss = -torch.log(1 - neg_out + 1e-15).mean()
-        # loss = pos_loss + neg_loss
+        # Predict negative edges
+        neg_out = predictor(emb_x[edge[0]], emb_x[edge[1]])
+        neg_loss = -torch.log(1 - neg_out + 1e-15).mean()
+        loss = pos_loss + neg_loss
 
-        # train without negative edges
-        loss = pos_loss
+        # # train without negative edges
+        # loss = pos_loss
 
         # Backward and update
         loss.backward()
@@ -96,7 +98,8 @@ def train(model, predictor, graph, split_edge, optimizer, batch_size):
     return total_loss / total_examples
 
 
-def valid(model, predictor, graph, split_edge):
+@torch.no_grad()
+def eval(model, predictor, graph, split_edge, evaluator, batch_size):
     # Set the model to evaluation mode
     model.eval()
     predictor.eval()
@@ -104,22 +107,106 @@ def valid(model, predictor, graph, split_edge):
     # Find the device for the graph
     device = graph.device
 
-    # Get the valid edges and move them to the device
-    valid_edges = split_edge["valid"]["edge"].to(device)
-    valid_feats = graph.ndata["feat"]
+    # Get different splitted edges and move them to the device
+    pos_train_edges = split_edge["train"]["edge"].to(device)
+    pos_valid_edges = split_edge["valid"]["edge"].to(device)
+    neg_valid_edges = split_edge["valid"]["edge_neg"].to(device)
+    pos_test_edges = split_edge["test"]["edge"].to(device)
+    neg_test_edges = split_edge["test"]["edge_neg"].to(device)
+    feats = graph.ndata["feat"]
 
     # Compute node embeddings
-    emb_x = model(graph, valid_feats)
+    emb_x = model(graph, feats)
 
-    # Predict edges
-    edge = valid_edges.t()
-    out = predictor(emb_x[edge[0]], emb_x[edge[1]])
-    loss = -torch.log(out + 1e-15).mean()
+    # # Predict edges
+    # edge = valid_edges.t()
+    # out = predictor(emb_x[edge[0]], emb_x[edge[1]])
+    # loss = -torch.log(out + 1e-15).mean()
 
-    return loss.item()
+    pos_train_preds = []
+    for perm in DataLoader(range(pos_train_edges.size(0)), batch_size, shuffle=False):
+        edge = pos_train_edges[perm].t()
+        pos_train_preds.append(
+            predictor(emb_x[edge[0]], emb_x[edge[1]]).squeeze().cpu()
+        )
+    pos_train_preds = torch.cat(pos_train_preds, dim=0)
+
+    pos_valid_preds = []
+    for perm in DataLoader(range(pos_valid_edges.size(0)), batch_size, shuffle=False):
+        edge = pos_valid_edges[perm].t()
+        pos_valid_preds.append(
+            predictor(emb_x[edge[0]], emb_x[edge[1]]).squeeze().cpu()
+        )
+    pos_valid_preds = torch.cat(pos_valid_preds, dim=0)
+
+    neg_valid_preds = []
+    for perm in DataLoader(range(neg_valid_edges.size(0)), batch_size, shuffle=False):
+        edge = neg_valid_edges[perm].t()
+        neg_valid_preds.append(
+            predictor(emb_x[edge[0]], emb_x[edge[1]]).squeeze().cpu()
+        )
+    neg_valid_preds = torch.cat(neg_valid_preds, dim=0)
+
+    pos_test_preds = []
+    for perm in DataLoader(range(pos_test_edges.size(0)), batch_size, shuffle=False):
+        edge = pos_test_edges[perm].t()
+        pos_test_preds.append(predictor(emb_x[edge[0]], emb_x[edge[1]]).squeeze().cpu())
+    pos_test_preds = torch.cat(pos_test_preds, dim=0)
+
+    neg_test_preds = []
+    for perm in DataLoader(range(neg_test_edges.size(0)), batch_size, shuffle=False):
+        edge = neg_test_edges[perm].t()
+        neg_test_preds.append(predictor(emb_x[edge[0]], emb_x[edge[1]]).squeeze().cpu())
+    neg_test_preds = torch.cat(neg_test_preds, dim=0)
+
+    evaluator.K = 50
+    train_hits = evaluator.eval(
+        {
+            "y_pred_pos": pos_train_preds,
+            "y_pred_neg": neg_valid_preds,
+        }
+    )["hits@50"]
+    valid_hits = evaluator.eval(
+        {
+            "y_pred_pos": pos_valid_preds,
+            "y_pred_neg": neg_valid_preds,
+        }
+    )["hits@50"]
+    test_hits = evaluator.eval(
+        {
+            "y_pred_pos": pos_test_preds,
+            "y_pred_neg": neg_test_preds,
+        }
+    )["hits@50"]
+
+    results = (train_hits, valid_hits, test_hits)
+
+    return results
 
 
 def main():
+    # Create the argument parser and parse the command-line arguments
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--save",
+        type=int,
+        default=10,
+        help="specify how many epochs to run before saving the model",
+    )
+    parser.add_argument(
+        "--epochs", type=int, default=10, help="specify how many epochs to run in total"
+    )
+    parser.add_argument(
+        "--batch_size",
+        type=int,
+        default=4096,
+        help="specify the batch size during training and testing",
+    )
+    parser.add_argument("--eval_steps", type=int, default=1)
+
+    # Parse the command-line arguments
+    args = parser.parse_args()
+
     # Use GPU if available
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using device:", device)
@@ -145,23 +232,26 @@ def main():
     graph = graph.to(device)
 
     # Set the number of epochs and the batch size
-    batch_size = 4096
-    epochs = 10
+    batch_size = args.batch_size
+    epochs = args.epochs + 1
     for epoch in range(epochs):
         print(f"Training epoch {epoch}...")
 
         # Train model
         loss = train(model, predictor, graph, split_edge, optimizer, batch_size)
-        print(f"Epoch {epoch}, train loss: {loss}")
+        print(f"train loss: {loss}")
 
-        # Validate model
-        loss = valid(model, predictor, graph, split_edge)
-        print(f"Epoch {epoch}, valid loss: {loss}")
+        # Evaluate model
+        if epoch % args.eval_steps == 0:
+            evaluator = Evaluator(name="ogbl-collab")
+            result = eval(model, predictor, graph, split_edge, evaluator, batch_size)
+            print(f"hits@50: {result}")
 
         print(f"Finished epoch {epoch}\n")
 
         # Save the model checkpoint if epoch is multiple of 10
-        if epoch % 10 != 0:
+        save = args.save
+        if epoch % save != 0:
             continue
         torch.save(
             {

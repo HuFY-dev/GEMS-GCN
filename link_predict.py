@@ -10,34 +10,39 @@ import argparse
 
 # Define the GCN model
 class GCN(nn.Module):
-    def __init__(self, in_feats, emb_feats):
+    def __init__(self, in_feats, hid_feats, emb_feats):
         super(GCN, self).__init__()
-        self.conv = GraphConv(in_feats, emb_feats)
-
-    def reset_parameters(self):
-        for conv in self.convs:
-            conv.reset_parameters()
+        self.conv1 = GraphConv(in_feats, hid_feats)
+        self.conv2 = GraphConv(hid_feats, emb_feats)
+        self.dropout = nn.Dropout(0.2)
 
     def forward(self, graph, x):
         # Move the input to the device of the graph
         x = x.to(graph.device)
 
         # Compute node embeddings
-        x = self.conv(graph, x)
+        x = self.conv1(graph, x)
         x = F.relu(x)
+        x = self.dropout(x)
+        x = self.conv2(graph, x)
         return x
 
 
 # Define the link prediction model
 class LinkPredictor(nn.Module):
-    def __init__(self, emb_feats, out_feats):
+    def __init__(self, emb_feats, hid_feats, out_feats):
         super(LinkPredictor, self).__init__()
-        self.lin = nn.Linear(emb_feats, out_feats)
+        self.lin1 = nn.Linear(emb_feats, hid_feats)
+        self.lin2 = nn.Linear(hid_feats, out_feats)
+        self.dropout = nn.Dropout(0.2)
 
     def forward(self, i_emb, j_emb):
         # Compute the link prediction scores
         x = i_emb * j_emb
-        x = self.lin(x)
+        x = self.lin1(x)
+        x = F.relu(x)
+        x = self.dropout(x)
+        x = self.lin2(x)
 
         # Use sigmoid to normalize the scores to be between 0 and 1
         return torch.sigmoid(x)
@@ -67,7 +72,7 @@ def train(model, predictor, graph, split_edge, optimizer, batch_size):
         emb_x = model(graph, train_feats)
 
         # Predict positive edges
-        edge = train_edges[perm].t()
+        edge = train_edges[perm].t().to(device)
         pos_out = predictor(emb_x[edge[0]], emb_x[edge[1]])
         pos_loss = -torch.log(pos_out + 1e-15).mean()
 
@@ -80,9 +85,6 @@ def train(model, predictor, graph, split_edge, optimizer, batch_size):
         neg_out = predictor(emb_x[edge[0]], emb_x[edge[1]])
         neg_loss = -torch.log(1 - neg_out + 1e-15).mean()
         loss = pos_loss + neg_loss
-
-        # # train without negative edges
-        # loss = pos_loss
 
         # Backward and update
         loss.backward()
@@ -118,16 +120,11 @@ def eval(model, predictor, graph, split_edge, evaluator, batch_size):
     # Compute node embeddings
     emb_x = model(graph, feats)
 
-    # # Predict edges
-    # edge = valid_edges.t()
-    # out = predictor(emb_x[edge[0]], emb_x[edge[1]])
-    # loss = -torch.log(out + 1e-15).mean()
-
     pos_train_preds = []
     for perm in DataLoader(range(pos_train_edges.size(0)), batch_size, shuffle=False):
         edge = pos_train_edges[perm].t()
         pos_train_preds.append(
-            predictor(emb_x[edge[0]], emb_x[edge[1]]).squeeze().cpu()
+            predictor(emb_x[edge[0]], emb_x[edge[1]]).squeeze()
         )
     pos_train_preds = torch.cat(pos_train_preds, dim=0)
 
@@ -135,7 +132,7 @@ def eval(model, predictor, graph, split_edge, evaluator, batch_size):
     for perm in DataLoader(range(pos_valid_edges.size(0)), batch_size, shuffle=False):
         edge = pos_valid_edges[perm].t()
         pos_valid_preds.append(
-            predictor(emb_x[edge[0]], emb_x[edge[1]]).squeeze().cpu()
+            predictor(emb_x[edge[0]], emb_x[edge[1]]).squeeze()
         )
     pos_valid_preds = torch.cat(pos_valid_preds, dim=0)
 
@@ -179,7 +176,7 @@ def eval(model, predictor, graph, split_edge, evaluator, batch_size):
         }
     )["hits@50"]
 
-    results = (train_hits, valid_hits, test_hits)
+    results = [train_hits, valid_hits, test_hits]
 
     return results
 
@@ -190,16 +187,16 @@ def main():
     parser.add_argument(
         "--save",
         type=int,
-        default=10,
+        default=100,
         help="specify how many epochs to run before saving the model",
     )
     parser.add_argument(
-        "--epochs", type=int, default=10, help="specify how many epochs to run in total"
+        "--epochs", type=int, default=400, help="specify how many epochs to run in total"
     )
     parser.add_argument(
         "--batch_size",
         type=int,
-        default=4096,
+        default=64 * 1024,
         help="specify the batch size during training and testing",
     )
     parser.add_argument("--eval_steps", type=int, default=1)
@@ -224,9 +221,10 @@ def main():
     train_feats = graph.ndata["feat"]
 
     # Create model and optimizer
-    emb_feats = 128
-    model = GCN(in_feats, emb_feats).to(device)
-    predictor = LinkPredictor(emb_feats, 1).to(device)
+    emb_feats = 256
+    hid_feats = 256
+    model = GCN(in_feats, hid_feats,emb_feats).to(device)
+    predictor = LinkPredictor(emb_feats, hid_feats, 1).to(device)
     optimizer = torch.optim.Adam(
         list(model.parameters()) + list(predictor.parameters()), lr=0.0005
     )

@@ -19,10 +19,9 @@ python link_predict.py
 ```
 The trained model will be saved in the root directory, and the training loss and hit@50 scores will be printed to the console. The script supports the following command-line arguments:
 ```
---save: type=int, default=10, help='specify how many epochs to run before saving the model'
---epochs: type=int, default=10, help='specify how many epochs to run in total'
---batch_size: type=int, default=4096, help='specify the batch size during training and testing'
---eval_steps: type=int, default=100, help='specify how many steps to run before evaluating the model'
+--save: type=int, default=100, help='specify how many epochs to run before saving the model'
+--epochs: type=int, default=400, help='specify how many epochs to run in total'
+--batch_size: type=int, default=65536, help='specify the batch size during training and testing'
 ```
 
 

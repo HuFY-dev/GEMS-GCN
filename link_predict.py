@@ -123,25 +123,19 @@ def eval(model, predictor, graph, split_edge, evaluator, batch_size):
     pos_train_preds = []
     for perm in DataLoader(range(pos_train_edges.size(0)), batch_size, shuffle=False):
         edge = pos_train_edges[perm].t()
-        pos_train_preds.append(
-            predictor(emb_x[edge[0]], emb_x[edge[1]]).squeeze()
-        )
+        pos_train_preds.append(predictor(emb_x[edge[0]], emb_x[edge[1]]).squeeze())
     pos_train_preds = torch.cat(pos_train_preds, dim=0)
 
     pos_valid_preds = []
     for perm in DataLoader(range(pos_valid_edges.size(0)), batch_size, shuffle=False):
         edge = pos_valid_edges[perm].t()
-        pos_valid_preds.append(
-            predictor(emb_x[edge[0]], emb_x[edge[1]]).squeeze()
-        )
+        pos_valid_preds.append(predictor(emb_x[edge[0]], emb_x[edge[1]]).squeeze())
     pos_valid_preds = torch.cat(pos_valid_preds, dim=0)
 
     neg_valid_preds = []
     for perm in DataLoader(range(neg_valid_edges.size(0)), batch_size, shuffle=False):
         edge = neg_valid_edges[perm].t()
-        neg_valid_preds.append(
-            predictor(emb_x[edge[0]], emb_x[edge[1]]).squeeze().cpu()
-        )
+        neg_valid_preds.append(predictor(emb_x[edge[0]], emb_x[edge[1]]).squeeze())
     neg_valid_preds = torch.cat(neg_valid_preds, dim=0)
 
     pos_test_preds = []
@@ -191,12 +185,15 @@ def main():
         help="specify how many epochs to run before saving the model",
     )
     parser.add_argument(
-        "--epochs", type=int, default=400, help="specify how many epochs to run in total"
+        "--epochs",
+        type=int,
+        default=400,
+        help="specify how many epochs to run in total",
     )
     parser.add_argument(
         "--batch_size",
         type=int,
-        default=64 * 1024,
+        default=65536,
         help="specify the batch size during training and testing",
     )
     parser.add_argument("--eval_steps", type=int, default=1)
@@ -223,7 +220,7 @@ def main():
     # Create model and optimizer
     emb_feats = 256
     hid_feats = 256
-    model = GCN(in_feats, hid_feats,emb_feats).to(device)
+    model = GCN(in_feats, hid_feats, emb_feats).to(device)
     predictor = LinkPredictor(emb_feats, hid_feats, 1).to(device)
     optimizer = torch.optim.Adam(
         list(model.parameters()) + list(predictor.parameters()), lr=0.0005

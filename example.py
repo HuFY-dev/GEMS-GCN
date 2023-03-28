@@ -14,15 +14,13 @@ from ogb.linkproppred import PygLinkPropPredDataset, Evaluator
 
 
 class GCN(torch.nn.Module):
-    def __init__(self, in_channels, hidden_channels, out_channels, num_layers,
-                 dropout):
+    def __init__(self, in_channels, hidden_channels, out_channels, num_layers, dropout):
         super(GCN, self).__init__()
 
         self.convs = torch.nn.ModuleList()
         self.convs.append(GCNConv(in_channels, hidden_channels, cached=True))
         for _ in range(num_layers - 2):
-            self.convs.append(
-                GCNConv(hidden_channels, hidden_channels, cached=True))
+            self.convs.append(GCNConv(hidden_channels, hidden_channels, cached=True))
         self.convs.append(GCNConv(hidden_channels, out_channels, cached=True))
 
         self.dropout = dropout
@@ -41,8 +39,7 @@ class GCN(torch.nn.Module):
 
 
 class SAGE(torch.nn.Module):
-    def __init__(self, in_channels, hidden_channels, out_channels, num_layers,
-                 dropout):
+    def __init__(self, in_channels, hidden_channels, out_channels, num_layers, dropout):
         super(SAGE, self).__init__()
 
         self.convs = torch.nn.ModuleList()
@@ -67,8 +64,7 @@ class SAGE(torch.nn.Module):
 
 
 class LinkPredictor(torch.nn.Module):
-    def __init__(self, in_channels, hidden_channels, out_channels, num_layers,
-                 dropout):
+    def __init__(self, in_channels, hidden_channels, out_channels, num_layers, dropout):
         super(LinkPredictor, self).__init__()
 
         self.lins = torch.nn.ModuleList()
@@ -97,11 +93,10 @@ def train(model, predictor, data, split_edge, optimizer, batch_size):
     model.train()
     predictor.train()
 
-    pos_train_edge = split_edge['train']['edge'].to(data.x.device)
+    pos_train_edge = split_edge["train"]["edge"].to(data.x.device)
 
     total_loss = total_examples = 0
-    for perm in DataLoader(range(pos_train_edge.size(0)), batch_size,
-                           shuffle=True):
+    for perm in DataLoader(range(pos_train_edge.size(0)), batch_size, shuffle=True):
         optimizer.zero_grad()
 
         h = model(data.x, data.adj_t)
@@ -112,8 +107,9 @@ def train(model, predictor, data, split_edge, optimizer, batch_size):
         pos_loss = -torch.log(pos_out + 1e-15).mean()
 
         # Just do some trivial random sampling.
-        edge = torch.randint(0, data.num_nodes, edge.size(), dtype=torch.long,
-                             device=h.device)
+        edge = torch.randint(
+            0, data.num_nodes, edge.size(), dtype=torch.long, device=h.device
+        )
         neg_out = predictor(h[edge[0]], h[edge[1]])
         neg_loss = -torch.log(1 - neg_out + 1e-15).mean()
 
@@ -139,11 +135,11 @@ def test(model, predictor, data, split_edge, evaluator, batch_size):
 
     h = model(data.x, data.adj_t)
 
-    pos_train_edge = split_edge['train']['edge'].to(h.device)
-    pos_valid_edge = split_edge['valid']['edge'].to(h.device)
-    neg_valid_edge = split_edge['valid']['edge_neg'].to(h.device)
-    pos_test_edge = split_edge['test']['edge'].to(h.device)
-    neg_test_edge = split_edge['test']['edge_neg'].to(h.device)
+    pos_train_edge = split_edge["train"]["edge"].to(h.device)
+    pos_valid_edge = split_edge["valid"]["edge"].to(h.device)
+    neg_valid_edge = split_edge["valid"]["edge_neg"].to(h.device)
+    pos_test_edge = split_edge["test"]["edge"].to(h.device)
+    neg_test_edge = split_edge["test"]["edge_neg"].to(h.device)
 
     pos_train_preds = []
     for perm in DataLoader(range(pos_train_edge.size(0)), batch_size):
@@ -180,45 +176,51 @@ def test(model, predictor, data, split_edge, evaluator, batch_size):
     results = {}
     for K in [10, 50, 100]:
         evaluator.K = K
-        train_hits = evaluator.eval({
-            'y_pred_pos': pos_train_pred,
-            'y_pred_neg': neg_valid_pred,
-        })[f'hits@{K}']
-        valid_hits = evaluator.eval({
-            'y_pred_pos': pos_valid_pred,
-            'y_pred_neg': neg_valid_pred,
-        })[f'hits@{K}']
-        test_hits = evaluator.eval({
-            'y_pred_pos': pos_test_pred,
-            'y_pred_neg': neg_test_pred,
-        })[f'hits@{K}']
+        train_hits = evaluator.eval(
+            {
+                "y_pred_pos": pos_train_pred,
+                "y_pred_neg": neg_valid_pred,
+            }
+        )[f"hits@{K}"]
+        valid_hits = evaluator.eval(
+            {
+                "y_pred_pos": pos_valid_pred,
+                "y_pred_neg": neg_valid_pred,
+            }
+        )[f"hits@{K}"]
+        test_hits = evaluator.eval(
+            {
+                "y_pred_pos": pos_test_pred,
+                "y_pred_neg": neg_test_pred,
+            }
+        )[f"hits@{K}"]
 
-        results[f'Hits@{K}'] = (train_hits, valid_hits, test_hits)
+        results[f"Hits@{K}"] = (train_hits, valid_hits, test_hits)
 
     return results
 
 
 def main():
-    parser = argparse.ArgumentParser(description='OGBL-COLLAB (GNN)')
-    parser.add_argument('--device', type=int, default=0)
-    parser.add_argument('--log_steps', type=int, default=1)
-    parser.add_argument('--use_sage', action='store_true')
-    parser.add_argument('--use_valedges_as_input', action='store_true')
-    parser.add_argument('--num_layers', type=int, default=3)
-    parser.add_argument('--hidden_channels', type=int, default=256)
-    parser.add_argument('--dropout', type=float, default=0.0)
-    parser.add_argument('--batch_size', type=int, default=64 * 1024)
-    parser.add_argument('--lr', type=float, default=0.001)
-    parser.add_argument('--epochs', type=int, default=400)
-    parser.add_argument('--eval_steps', type=int, default=1)
-    parser.add_argument('--runs', type=int, default=10)
+    parser = argparse.ArgumentParser(description="OGBL-COLLAB (GNN)")
+    parser.add_argument("--device", type=int, default=0)
+    parser.add_argument("--log_steps", type=int, default=1)
+    parser.add_argument("--use_sage", action="store_true")
+    parser.add_argument("--use_valedges_as_input", action="store_true")
+    parser.add_argument("--num_layers", type=int, default=3)
+    parser.add_argument("--hidden_channels", type=int, default=256)
+    parser.add_argument("--dropout", type=float, default=0.0)
+    parser.add_argument("--batch_size", type=int, default=64 * 1024)
+    parser.add_argument("--lr", type=float, default=0.001)
+    parser.add_argument("--epochs", type=int, default=400)
+    parser.add_argument("--eval_steps", type=int, default=1)
+    parser.add_argument("--runs", type=int, default=10)
     args = parser.parse_args()
     print(args)
 
-    device = f'cuda:{args.device}' if torch.cuda.is_available() else 'cpu'
+    device = f"cuda:{args.device}" if torch.cuda.is_available() else "cpu"
     device = torch.device(device)
 
-    dataset = PygLinkPropPredDataset(name='ogbl-collab')
+    dataset = PygLinkPropPredDataset(name="ogbl-collab")
     data = dataset[0]
     edge_index = data.edge_index
     data.edge_weight = data.edge_weight.view(-1).to(torch.float)
@@ -228,7 +230,7 @@ def main():
 
     # Use training + validation edges for inference on test set.
     if args.use_valedges_as_input:
-        val_edge_index = split_edge['valid']['edge'].t()
+        val_edge_index = split_edge["valid"]["edge"].t()
         full_edge_index = torch.cat([edge_index, val_edge_index], dim=-1)
         data.full_adj_t = SparseTensor.from_edge_index(full_edge_index).t()
         data.full_adj_t = data.full_adj_t.to_symmetric()
@@ -238,27 +240,36 @@ def main():
     data = data.to(device)
 
     if args.use_sage:
-        model = SAGE(data.num_features, args.hidden_channels,
-                     args.hidden_channels, args.num_layers,
-                     args.dropout).to(device)
+        model = SAGE(
+            data.num_features,
+            args.hidden_channels,
+            args.hidden_channels,
+            args.num_layers,
+            args.dropout,
+        ).to(device)
     else:
-        model = GCN(data.num_features, args.hidden_channels,
-                    args.hidden_channels, args.num_layers,
-                    args.dropout).to(device)
+        model = GCN(
+            data.num_features,
+            args.hidden_channels,
+            args.hidden_channels,
+            args.num_layers,
+            args.dropout,
+        ).to(device)
 
-    predictor = LinkPredictor(args.hidden_channels, args.hidden_channels, 1,
-                              args.num_layers, args.dropout).to(device)
+    predictor = LinkPredictor(
+        args.hidden_channels, args.hidden_channels, 1, args.num_layers, args.dropout
+    ).to(device)
 
-    evaluator = Evaluator(name='ogbl-collab')
+    evaluator = Evaluator(name="ogbl-collab")
     # loggers = {
     #     'Hits@10': Logger(args.runs, args),
     #     'Hits@50': Logger(args.runs, args),
     #     'Hits@100': Logger(args.runs, args),
     # }
     loggers = {
-        'Hits@10': 0,
-        'Hits@50': 0,
-        'Hits@100':0,
+        "Hits@10": 0,
+        "Hits@50": 0,
+        "Hits@100": 0,
     }
 
     for run in range(args.runs):
@@ -268,16 +279,16 @@ def main():
         print(f"Predictor layers: {predictor.lins}")
         exit(0)
         optimizer = torch.optim.Adam(
-            list(model.parameters()) + list(predictor.parameters()),
-            lr=args.lr)
+            list(model.parameters()) + list(predictor.parameters()), lr=args.lr
+        )
 
         for epoch in range(1, 1 + args.epochs):
-            loss = train(model, predictor, data, split_edge, optimizer,
-                         args.batch_size)
+            loss = train(model, predictor, data, split_edge, optimizer, args.batch_size)
 
             if epoch % args.eval_steps == 0:
-                results = test(model, predictor, data, split_edge, evaluator,
-                               args.batch_size)
+                results = test(
+                    model, predictor, data, split_edge, evaluator, args.batch_size
+                )
                 for key, result in results.items():
                     # loggers[key].add_result(run, result)
                     loggers[key] = result
@@ -286,13 +297,15 @@ def main():
                     for key, result in results.items():
                         train_hits, valid_hits, test_hits = result
                         print(key)
-                        print(f'Run: {run + 1:02d}, '
-                              f'Epoch: {epoch:02d}, '
-                              f'Loss: {loss:.4f}, '
-                              f'Train: {100 * train_hits:.2f}%, '
-                              f'Valid: {100 * valid_hits:.2f}%, '
-                              f'Test: {100 * test_hits:.2f}%')
-                    print('---')
+                        print(
+                            f"Run: {run + 1:02d}, "
+                            f"Epoch: {epoch:02d}, "
+                            f"Loss: {loss:.4f}, "
+                            f"Train: {100 * train_hits:.2f}%, "
+                            f"Valid: {100 * valid_hits:.2f}%, "
+                            f"Test: {100 * test_hits:.2f}%"
+                        )
+                    print("---")
 
         # for key in loggers.keys():
         #     print(key)
